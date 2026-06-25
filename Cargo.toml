@@ -1,0 +1,85 @@
+[package]
+name = "teamy-cancellation"
+version = "0.1.0"
+edition = "2024"
+authors = ["TeamDman"]
+description = "Reusable cancellation primitives for Teamy Rust tools."
+license = "MPL-2.0"
+readme = "README.md"
+repository = "https://github.com/TeamDman/teamy-cancellation"
+keywords = ["cancellation", "ctrlc", "tracing", "cli"]
+categories = ["asynchronous", "command-line-utilities"]
+documentation = "https://github.com/TeamDman/teamy-cancellation"
+
+[dependencies]
+ctrlc = { version = "3.5.1", optional = true }
+eyre = "0.6.12"
+facet = { version = "=0.46.5", optional = true }
+tracing = { version = "0.1.41", optional = true }
+tracing-subscriber = { version = "0.3.19", optional = true }
+
+[features]
+default = ["ctrlc", "tracing", "tracing-subscriber", "inheritance"]
+ctrlc = ["dep:ctrlc"]
+tracing = ["dep:tracing"]
+tracing-subscriber = ["tracing", "dep:tracing-subscriber"]
+inheritance = []
+facet = ["dep:facet"]
+
+[[example]]
+name = "cancellation_token"
+path = "examples/cancellation_token.rs"
+
+[[example]]
+name = "inheritance"
+path = "examples/inheritance.rs"
+required-features = ["inheritance"]
+
+[[example]]
+name = "stop_after"
+path = "examples/stop_after.rs"
+required-features = ["tracing-subscriber"]
+
+[[example]]
+name = "ctrlc"
+path = "examples/ctrlc.rs"
+required-features = ["ctrlc"]
+
+[lints.rust]
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"
+module_inception = "allow"
+allow_attributes = "deny"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
