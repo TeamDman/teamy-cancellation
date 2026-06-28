@@ -6,9 +6,9 @@ Reusable cancellation primitives for Teamy Rust tools.
 
 - `CancellationToken`
   - shared cancellation state with `request_cancel`, `is_cancelled`,
-    `cancellation_reason`, and `bail_if_cancelled`
+    `cancellation_reason`, `bail_if_cancelled`, and optional cancellation hooks
 - `CtrlCHandler` with feature `ctrlc`
-  - configurable process-wide Ctrl+C installer
+  - configurable process-wide Ctrl+C installer, including double-Ctrl+C force-exit policy
 - `StopAfterLayer` with feature `tracing-subscriber`
   - `tracing-subscriber` layer that cancels a token after a matching span close
     or event message
@@ -44,6 +44,18 @@ token.request_cancel("shutting down");
 token.bail_if_cancelled()?;
 ```
 
+Token with cancellation hook:
+
+```rust
+use teamy_cancellation::CancellationToken;
+
+let token = CancellationToken::new_with_on_cancel_request(|reason, was_first| {
+    if was_first {
+        // cancel external worker that isn't using our cancellation token
+    }
+});
+```
+
 Install Ctrl+C handling:
 
 ```rust
@@ -60,6 +72,8 @@ use teamy_cancellation::CtrlCHandler;
 
 let token = CtrlCHandler {
     should_eprintln_on_ctrl_c: false,
+    should_force_exit_on_repeated_ctrl_c: true,
+    repeated_ctrl_c_window: std::time::Duration::from_secs(2),
 }
 .install()?;
 ```

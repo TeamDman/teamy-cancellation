@@ -26,10 +26,15 @@ impl CancellationState {
         }
     }
 
-    pub fn record_ctrl_c(&mut self, now: Instant) -> CtrlCAction {
-        let force_exit = self
-            .last_ctrl_c
-            .is_some_and(|last| now.duration_since(last) <= Duration::from_secs(1));
+    pub fn record_ctrl_c(
+        &mut self,
+        now: Instant,
+        repeated_ctrl_c_window: Option<Duration>,
+    ) -> CtrlCAction {
+        let force_exit = repeated_ctrl_c_window.is_some_and(|window| {
+            self.last_ctrl_c
+                .is_some_and(|last| now.duration_since(last) <= window)
+        });
         self.last_ctrl_c = Some(now);
         self.cancelled = true;
         if force_exit {
@@ -63,7 +68,7 @@ mod tests {
     fn first_ctrl_c_requests_graceful_shutdown() {
         let mut state = CancellationState::new();
 
-        let action = state.record_ctrl_c(Instant::now());
+        let action = state.record_ctrl_c(Instant::now(), Some(Duration::from_secs(1)));
 
         assert_eq!(action, CtrlCAction::RequestGracefulShutdown);
         assert!(state.is_cancelled());
@@ -73,9 +78,12 @@ mod tests {
     fn second_fast_ctrl_c_forces_exit() {
         let mut state = CancellationState::new();
         let now = Instant::now();
-        state.record_ctrl_c(now);
+        state.record_ctrl_c(now, Some(Duration::from_secs(1)));
 
-        let action = state.record_ctrl_c(now + Duration::from_millis(250));
+        let action = state.record_ctrl_c(
+            now + Duration::from_millis(250),
+            Some(Duration::from_secs(1)),
+        );
 
         assert_eq!(action, CtrlCAction::ForceExit);
     }
@@ -84,9 +92,21 @@ mod tests {
     fn second_slow_ctrl_c_stays_graceful() {
         let mut state = CancellationState::new();
         let now = Instant::now();
-        state.record_ctrl_c(now);
+        state.record_ctrl_c(now, Some(Duration::from_secs(1)));
 
-        let action = state.record_ctrl_c(now + Duration::from_secs(2));
+        let action =
+            state.record_ctrl_c(now + Duration::from_secs(2), Some(Duration::from_secs(1)));
+
+        assert_eq!(action, CtrlCAction::RequestGracefulShutdown);
+    }
+
+    #[test]
+    fn repeated_ctrl_c_can_stay_graceful_when_force_exit_is_disabled() {
+        let mut state = CancellationState::new();
+        let now = Instant::now();
+        state.record_ctrl_c(now, None);
+
+        let action = state.record_ctrl_c(now + Duration::from_millis(250), None);
 
         assert_eq!(action, CtrlCAction::RequestGracefulShutdown);
     }

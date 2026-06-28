@@ -3,6 +3,7 @@ use crate::cancellation_state::CancellationState;
 use crate::cancellation_state::CtrlCAction;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -10,6 +11,13 @@ use std::time::Instant;
 pub struct CtrlCHandler {
     /// Whether the handler should print `^C` to stderr when Ctrl+C is received.
     pub should_eprintln_on_ctrl_c: bool,
+    /// Whether a repeated Ctrl+C inside `repeated_ctrl_c_window` should force
+    /// the process to exit with code 130.
+    pub should_force_exit_on_repeated_ctrl_c: bool,
+    /// Maximum elapsed time between consecutive Ctrl+C inputs that should
+    /// trigger force-exit behavior when enabled.
+    #[cfg_attr(feature = "facet", facet(opaque))]
+    pub repeated_ctrl_c_window: Duration,
 }
 
 impl CtrlCHandler {
@@ -17,6 +25,8 @@ impl CtrlCHandler {
     pub const fn new() -> Self {
         Self {
             should_eprintln_on_ctrl_c: true,
+            should_force_exit_on_repeated_ctrl_c: true,
+            repeated_ctrl_c_window: Duration::from_secs(1),
         }
     }
 
@@ -27,7 +37,23 @@ impl CtrlCHandler {
     ///
     /// Returns an error if the platform handler cannot be registered.
     pub fn install(self) -> eyre::Result<CancellationToken> {
-        let cancellation_token = CancellationToken::new();
+        self.install_with_on_cancel_request(|_reason, _was_first| {})
+    }
+
+    /// Create the process cancellation token with a cancellation hook and
+    /// install the process-wide Ctrl+C handler.
+    ///
+    /// The hook runs for each cancellation request. `was_first` is `true` only
+    /// on the first successful transition into the cancelled state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform handler cannot be registered.
+    pub fn install_with_on_cancel_request(
+        self,
+        on_cancel_request: impl Fn(&str, bool) + Send + Sync + 'static,
+    ) -> eyre::Result<CancellationToken> {
+        let cancellation_token = CancellationToken::new_with_on_cancel_request(on_cancel_request);
         let handler_token = cancellation_token.clone();
         let handler_state = Arc::new(Mutex::new(CancellationState::new()));
         let ctrlc_state = Arc::clone(&handler_state);
@@ -55,7 +81,12 @@ fn handle_ctrl_c(
         let mut state = state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.record_ctrl_c(Instant::now())
+        state.record_ctrl_c(
+            Instant::now(),
+            handler
+                .should_force_exit_on_repeated_ctrl_c
+                .then_some(handler.repeated_ctrl_c_window),
+        )
     };
     cancellation_token.request_cancel("Operation cancelled by Ctrl+C");
     match action {
@@ -74,9 +105,18 @@ fn handle_ctrl_c(
 #[cfg(test)]
 mod tests {
     use super::CtrlCHandler;
+    use std::time::Duration;
 
     #[test]
     fn default_handler_prints_ctrl_c() {
         assert!(CtrlCHandler::default().should_eprintln_on_ctrl_c);
+    }
+
+    #[test]
+    fn default_handler_force_exits_on_repeated_ctrl_c() {
+        let handler = CtrlCHandler::default();
+
+        assert!(handler.should_force_exit_on_repeated_ctrl_c);
+        assert_eq!(handler.repeated_ctrl_c_window, Duration::from_secs(1));
     }
 }

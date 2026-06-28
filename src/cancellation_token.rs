@@ -4,6 +4,8 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use tracing::debug;
+
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "facet", derive(facet::Facet))]
 #[cfg_attr(feature = "facet", facet(opaque))]
@@ -11,10 +13,13 @@ pub struct CancellationToken {
     inner: Arc<CancellationInner>,
 }
 
+type CancelHook = dyn Fn(&str, bool) + Send + Sync + 'static;
+
 #[derive(Default)]
 struct CancellationInner {
     cancelled: AtomicBool,
     reason: Mutex<Option<String>>,
+    on_cancel_request: Option<Arc<CancelHook>>,
     #[cfg(feature = "inheritance")]
     parent: Option<CancellationToken>,
 }
@@ -25,6 +30,21 @@ impl CancellationToken {
         Self::default()
     }
 
+    #[must_use]
+    pub fn new_with_on_cancel_request(
+        on_cancel_request: impl Fn(&str, bool) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::new(CancellationInner {
+                cancelled: AtomicBool::new(false),
+                reason: Mutex::new(None),
+                on_cancel_request: Some(Arc::new(on_cancel_request)),
+                #[cfg(feature = "inheritance")]
+                parent: None,
+            }),
+        }
+    }
+
     #[cfg(feature = "inheritance")]
     #[must_use]
     pub fn child_token(&self) -> Self {
@@ -32,6 +52,7 @@ impl CancellationToken {
             inner: Arc::new(CancellationInner {
                 cancelled: AtomicBool::new(false),
                 reason: Mutex::new(None),
+                on_cancel_request: None,
                 parent: Some(self.clone()),
             }),
         }
@@ -42,7 +63,7 @@ impl CancellationToken {
         #[cfg(feature = "tracing")]
         let accepted = self.store_reason_if_missing(&reason);
         #[cfg(not(feature = "tracing"))]
-        self.store_reason_if_missing(&reason);
+        let accepted = self.store_reason_if_missing(&reason);
 
         #[cfg(feature = "tracing")]
         if accepted {
@@ -53,6 +74,8 @@ impl CancellationToken {
                 "Ignoring cancellation request because cancellation has already been requested"
             );
         }
+
+        self.run_on_cancel_request_hook(&reason, accepted);
 
         self.inner.cancelled.store(true, Ordering::Release);
     }
@@ -126,6 +149,13 @@ impl CancellationToken {
             true
         } else {
             false
+        }
+    }
+
+    fn run_on_cancel_request_hook(&self, reason: &str, accepted: bool) {
+        if let Some(on_cancel_request) = &self.inner.on_cancel_request {
+            debug!("Running on_cancel_request hook");
+            on_cancel_request(reason, accepted);
         }
     }
 }
