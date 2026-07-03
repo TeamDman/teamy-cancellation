@@ -7,6 +7,7 @@ use std::time::Duration;
 
 /// Figue-compatible cancellation arguments for Teamy CLI tools.
 #[derive(Facet, Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[facet(rename_all = "kebab-case")]
 pub struct StopAfterArgs {
     /// Request graceful cancellation after the named tracing/Tracy span or log message is encountered.

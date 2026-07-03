@@ -1,6 +1,6 @@
 [package]
 name = "teamy-cancellation"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["TeamDman"]
 description = "Reusable cancellation primitives for Teamy Rust tools."
@@ -12,6 +12,7 @@ categories = ["asynchronous", "command-line-utilities"]
 documentation = "https://github.com/TeamDman/teamy-cancellation"
 
 [dependencies]
+arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
 ctrlc = { version = "3.5.1", optional = true }
 eyre = "0.6.12"
 facet = { version = "0.50.0-rc.5", git = "https://github.com/TeamDman/facet.git", rev = "d0c3140ec6683f80249d50d74fa073911e0dfeb9", package = "facet", optional = true }
@@ -22,6 +23,7 @@ tracing-subscriber = { version = "0.3.19", optional = true }
 
 [features]
 default = ["ctrlc", "tracing", "tracing-subscriber", "inheritance"]
+arbitrary = ["dep:arbitrary"]
 ctrlc = ["dep:ctrlc"]
 tracing = ["dep:tracing"]
 tracing-subscriber = ["tracing", "dep:tracing-subscriber"]
