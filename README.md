@@ -24,6 +24,10 @@ Reusable cancellation primitives for Teamy Rust tools.
   - enables `StopAfterLayer`
 - `inheritance` (default)
   - enables parent/child cancellation propagation via `CancellationToken::child_token()`
+- `figue`
+  - enables `StopAfterArgs`, a `facet`/`figue` CLI argument struct for
+    `--stop-after` span/log-message cancellation and `--stop-after-duration`
+    timed cancellation
 - `facet`
   - derives `facet::Facet` for the public types; runtime handle types are marked
     opaque because they wrap process-local state
@@ -103,6 +107,21 @@ tracing_subscriber::registry()
     .try_init()?;
 ```
 
+Figue-driven CLI cancellation with feature `figue`:
+
+```rust
+use teamy_cancellation::CancellationToken;
+use teamy_cancellation::StopAfterArgs;
+use tracing_subscriber::prelude::*;
+
+let args: StopAfterArgs = figue::from_slice(&["--stop-after", "job_stage_2_complete"])?;
+let token = CancellationToken::new();
+
+let _timer = args.start_stop_after_duration_thread(token.clone())?;
+let subscriber = tracing_subscriber::registry()
+    .with(args.stop_after_span_layer(token.clone()));
+```
+
 ## Examples
 
 - `cargo run --example cancellation_token`
@@ -113,6 +132,11 @@ tracing_subscriber::registry()
   - parent token cancellation propagating to a child token
 - `cargo run --example stop_after`
   - `StopAfterLayer` cancelling a token after a matching event
+- `cargo run --features figue --example stop_after -- --stop-after job_stage_2_complete`
+  - parse a span/log-message stop condition with `figue`
+- `cargo run --features figue --example stop_after -- --stop-after-duration 2s`
+  - parse a human-readable duration with `figue` and automatically request
+    cancellation from a named thread after 2 seconds
 
 `ctrlc` is interactive: run it in a terminal and press `Ctrl+C` to trigger the
 installed handler.

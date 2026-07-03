@@ -4,8 +4,6 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use tracing::debug;
-
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "facet", derive(facet::Facet))]
 #[cfg_attr(feature = "facet", facet(opaque))]
@@ -154,7 +152,8 @@ impl CancellationToken {
 
     fn run_on_cancel_request_hook(&self, reason: &str, accepted: bool) {
         if let Some(on_cancel_request) = &self.inner.on_cancel_request {
-            debug!("Running on_cancel_request hook");
+            #[cfg(feature = "tracing")]
+            tracing::debug!("Running on_cancel_request hook");
             on_cancel_request(reason, accepted);
         }
     }

@@ -13,3 +13,8 @@ pub use ctrlc_handler::CtrlCHandler;
 mod stop_after_layer;
 #[cfg(feature = "tracing-subscriber")]
 pub use stop_after_layer::StopAfterLayer;
+
+#[cfg(feature = "figue")]
+mod figue_args;
+#[cfg(feature = "figue")]
+pub use figue_args::StopAfterArgs;
