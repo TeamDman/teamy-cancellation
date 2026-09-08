@@ -36,6 +36,30 @@ Reusable cancellation primitives for Teamy Rust tools.
 and not the subscriber integration layer, use `default-features = false,
 features = ["tracing"]`.
 
+## Upstream integration dependencies
+
+The optional `facet` and `figue` dependencies use official registry releases
+`0.50.0-rc.7` and `5.0.0-rc.6`. This integration branch tests them with
+workspace-root `[patch.crates-io]` overrides pinned to public, immutable commits:
+
+- Core Facet family: `a6101f92fa88ada6dedd80899140577e554bd5d3` from
+  [TeamDman/facet](https://github.com/TeamDman/facet/commit/a6101f92fa88ada6dedd80899140577e554bd5d3).
+- Figue and its attributes: `1ebad28e18d3e778c4e82cb255b26f0e23d4fed7` from
+  [TeamDman/figue](https://github.com/TeamDman/figue/commit/1ebad28e18d3e778c4e82cb255b26f0e23d4fed7).
+
+These are upstream-plus-PR integration references, not floating branch pins.
+Cancellation's implementation does not use the unmerged Cow reflection APIs;
+the overrides keep its integration tests on the same dependency family as
+Cloud Terrastodon. Split-out packages such as `facet-format` and `facet-json`
+remain registry dependencies.
+
+Cargo only applies patches from the consuming workspace root. A downstream
+project does **not** inherit this patch block: ordinary consumers resolve the
+declared registry versions, while Cloud Terrastodon supplies its own matching
+root overrides to select the PR stack throughout its dependency graph. When
+the required changes are published upstream, update the normal dependencies
+and remove the temporary overrides together.
+
 ## Usage
 
 Basic token usage:
