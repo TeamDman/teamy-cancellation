@@ -44,8 +44,10 @@ workspace-root `[patch.crates-io]` overrides pinned to public, immutable commits
 
 - Core Facet family: `a6101f92fa88ada6dedd80899140577e554bd5d3` from
   [TeamDman/facet](https://github.com/TeamDman/facet/commit/a6101f92fa88ada6dedd80899140577e554bd5d3).
-- Figue and its attributes: `1ebad28e18d3e778c4e82cb255b26f0e23d4fed7` from
-  [TeamDman/figue](https://github.com/TeamDman/figue/commit/1ebad28e18d3e778c4e82cb255b26f0e23d4fed7).
+- Figue and its attributes: `834293b7bc379f3502767aa6aee06958e99d8bb0` from
+  [TeamDman/figue](https://github.com/TeamDman/figue/commit/834293b7bc379f3502767aa6aee06958e99d8bb0),
+  including the transparent-scalar CLI support proposed in
+  [Figue PR #124](https://github.com/bearcove/figue/pull/124).
 
 These are upstream-plus-PR integration references, not floating branch pins.
 Cancellation's implementation does not use the unmerged Cow reflection APIs;
