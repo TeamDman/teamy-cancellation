@@ -1,25 +1,25 @@
+use crate::CancellationListener;
+#[cfg(feature = "async")]
+use crate::CancellationWait;
+#[cfg(feature = "deferral")]
+use crate::cancellation_deferral_state::CancellationDeferralState;
+use crate::cancellation_inner::CancellationInner;
+use crate::cancellation_listener_state::CancellationListenerState;
+use crate::cancellation_registration::CancellationRegistration;
+#[cfg(feature = "async")]
+use crate::cancellation_waker::CancellationWaker;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+/// Shared cancellation intent with optional operation-local deferrals.
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "facet", derive(facet::Facet))]
 #[cfg_attr(feature = "facet", facet(opaque))]
 pub struct CancellationToken {
     inner: Arc<CancellationInner>,
-}
-
-type CancelHook = dyn Fn(&str, bool) + Send + Sync + 'static;
-
-#[derive(Default)]
-struct CancellationInner {
-    cancelled: AtomicBool,
-    reason: Mutex<Option<String>>,
-    on_cancel_request: Option<Arc<CancelHook>>,
-    #[cfg(feature = "inheritance")]
-    parent: Option<CancellationToken>,
+    #[cfg(feature = "deferral")]
+    pub(crate) deferral_state: Arc<CancellationDeferralState>,
 }
 
 impl CancellationToken {
@@ -34,12 +34,24 @@ impl CancellationToken {
     ) -> Self {
         Self {
             inner: Arc::new(CancellationInner {
-                cancelled: AtomicBool::new(false),
-                reason: Mutex::new(None),
                 on_cancel_request: Some(Arc::new(on_cancel_request)),
-                #[cfg(feature = "inheritance")]
-                parent: None,
+                ..CancellationInner::default()
             }),
+            #[cfg(feature = "deferral")]
+            deferral_state: Arc::default(),
+        }
+    }
+
+    /// Share this cancellation request state with a new operation-local scope.
+    ///
+    /// Clones of the returned token share deferrals; independent calls have
+    /// independent deferrals. Cancellation remains shared with this token.
+    #[cfg(feature = "deferral")]
+    #[must_use]
+    pub fn for_operation(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            deferral_state: Arc::default(),
         }
     }
 
@@ -48,20 +60,52 @@ impl CancellationToken {
     pub fn child_token(&self) -> Self {
         Self {
             inner: Arc::new(CancellationInner {
-                cancelled: AtomicBool::new(false),
-                reason: Mutex::new(None),
-                on_cancel_request: None,
                 parent: Some(self.clone()),
+                ..CancellationInner::default()
             }),
+            #[cfg(feature = "deferral")]
+            deferral_state: Arc::default(),
         }
     }
 
+    /// Request cancellation, preserving the first local reason.
+    ///
+    /// The requested state and all async wakeups are published before callbacks.
+    /// The constructor hook runs for every request; dynamic listeners run once.
     pub fn request_cancel(&self, reason: impl Into<String>) {
         let reason = reason.into();
-        #[cfg(feature = "tracing")]
-        let accepted = self.store_reason_if_missing(&reason);
-        #[cfg(not(feature = "tracing"))]
-        let accepted = self.store_reason_if_missing(&reason);
+        let accepted = {
+            let mut stored = self
+                .inner
+                .reason
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let accepted = stored.is_none();
+            if accepted {
+                *stored = Some(reason.clone());
+            }
+            self.inner.cancelled.store(true, Ordering::Release);
+            accepted
+        };
+        let listeners;
+        #[cfg(feature = "async")]
+        let waiters;
+        {
+            let registrations = self
+                .inner
+                .registrations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            listeners = registrations.listeners();
+            #[cfg(feature = "async")]
+            {
+                waiters = registrations.waiters();
+            }
+        }
+        #[cfg(feature = "async")]
+        for waiter in waiters {
+            waiter.wake();
+        }
 
         #[cfg(feature = "tracing")]
         if accepted {
@@ -73,18 +117,23 @@ impl CancellationToken {
             );
         }
 
-        self.run_on_cancel_request_hook(&reason, accepted);
-
-        self.inner.cancelled.store(true, Ordering::Release);
+        let stored_reason = self
+            .cancellation_reason()
+            .unwrap_or_else(|| String::from("Operation cancelled"));
+        for listener in listeners {
+            listener.notify(&stored_reason);
+        }
+        if let Some(hook) = &self.inner.on_cancel_request {
+            hook(&reason, accepted);
+        }
     }
 
+    /// Observe raw cancellation intent, including an inherited parent's request.
+    /// Operation deferrals do not change this flag.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::Acquire)
-            || self
-                .parent()
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
+            || self.parent().as_ref().is_some_and(Self::is_cancelled)
     }
 
     #[must_use]
@@ -95,66 +144,146 @@ impl CancellationToken {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        reason.or_else(|| {
-            self.parent()
-                .as_ref()
-                .and_then(CancellationToken::cancellation_reason)
-        })
+        reason.or_else(|| self.parent().as_ref().and_then(Self::cancellation_reason))
+    }
+
+    /// Listen once for cancellation on this token or an inherited parent.
+    ///
+    /// The callback receives a snapshot of the first notification's reason. An
+    /// already requested token invokes the callback before this method returns.
+    /// Dropping the returned handle unregisters the listener; repeated requests
+    /// do not repeat its callback. Callbacks run outside internal locks.
+    #[must_use]
+    pub fn register_listener(
+        &self,
+        callback: impl Fn(&str) + Send + Sync + 'static,
+    ) -> CancellationListener {
+        let state = Arc::new(CancellationListenerState::new(callback));
+        let mut listener = CancellationListener {
+            state,
+            registrations: Vec::new(),
+        };
+        if !self.is_cancelled() {
+            for inner in self.cancellation_chain() {
+                let id = inner
+                    .registrations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .add_listener(&listener.state);
+                listener.registrations.push(CancellationRegistration {
+                    inner: Arc::downgrade(&inner),
+                    id,
+                });
+            }
+        }
+        // Register then recheck so a racing request cannot miss this listener.
+        if self.is_cancelled() {
+            listener.state.notify(
+                &self
+                    .cancellation_reason()
+                    .unwrap_or_else(|| String::from("Operation cancelled")),
+            );
+        }
+        listener
+    }
+
+    /// Wait for sticky requested cancellation without needing a runtime.
+    #[cfg(feature = "async")]
+    #[must_use]
+    pub fn cancelled(&self) -> CancellationWait {
+        CancellationWait::new(self.clone())
     }
 
     /// # Errors
-    ///
-    /// Returns an error after cancellation has been requested.
+    /// Returns the cancellation reason when this operation may stop. With the
+    /// `deferral` feature, a live guard allows required cleanup to finish.
     #[track_caller]
     pub fn bail_if_cancelled(&self) -> eyre::Result<()> {
-        if self.is_cancelled() {
-            let reason = self
-                .cancellation_reason()
-                .unwrap_or_else(|| String::from("Operation cancelled"));
-            eyre::bail!("{reason}");
+        if self.should_cancel() {
+            #[cfg(any(feature = "async", feature = "deferral"))]
+            return Err(crate::CancellationError::from_token(self).into());
+            #[cfg(not(any(feature = "async", feature = "deferral")))]
+            {
+                let reason = self
+                    .cancellation_reason()
+                    .unwrap_or_else(|| String::from("Operation cancelled"));
+                eyre::bail!("{reason}");
+            }
         }
         Ok(())
+    }
+
+    pub(crate) fn should_cancel(&self) -> bool {
+        if !self.is_cancelled() {
+            return false;
+        }
+        #[cfg(feature = "deferral")]
+        {
+            !self.deferral_state.is_deferred()
+        }
+        #[cfg(not(feature = "deferral"))]
+        {
+            true
+        }
+    }
+
+    fn parent(&self) -> Option<Self> {
+        #[cfg(feature = "inheritance")]
+        {
+            self.inner.parent.clone()
+        }
+        #[cfg(not(feature = "inheritance"))]
+        {
+            None
+        }
+    }
+
+    fn cancellation_chain(&self) -> Vec<Arc<CancellationInner>> {
+        let mut chain = Vec::new();
+        let mut current = Some(self.clone());
+        while let Some(token) = current {
+            chain.push(Arc::clone(&token.inner));
+            current = token.parent();
+        }
+        chain
+    }
+
+    #[cfg(feature = "async")]
+    pub(crate) fn register_waiter(
+        &self,
+        waiter: &Arc<CancellationWaker>,
+    ) -> Vec<CancellationRegistration> {
+        self.cancellation_chain()
+            .into_iter()
+            .map(|inner| {
+                let id = inner
+                    .registrations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .add_waiter(waiter);
+                CancellationRegistration {
+                    inner: Arc::downgrade(&inner),
+                    id,
+                }
+            })
+            .collect()
     }
 }
 
 impl fmt::Debug for CancellationToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CancellationToken")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CancellationToken")
             .field("is_cancelled", &self.is_cancelled())
             .finish_non_exhaustive()
     }
 }
 
-impl CancellationToken {
-    #[cfg(feature = "inheritance")]
-    fn parent(&self) -> Option<CancellationToken> {
-        self.inner.parent.clone()
-    }
-
-    #[cfg(not(feature = "inheritance"))]
-    fn parent(&self) -> Option<CancellationToken> {
-        None
-    }
-
-    fn store_reason_if_missing(&self, reason: &str) -> bool {
-        let mut stored_reason = self
-            .inner
-            .reason
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if stored_reason.is_none() {
-            *stored_reason = Some(reason.to_string());
-            true
-        } else {
-            false
-        }
-    }
-
-    fn run_on_cancel_request_hook(&self, reason: &str, accepted: bool) {
-        if let Some(on_cancel_request) = &self.inner.on_cancel_request {
-            #[cfg(feature = "tracing")]
-            tracing::debug!("Running on_cancel_request hook");
-            on_cancel_request(reason, accepted);
-        }
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for CancellationToken {
+    fn arbitrary(_input: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        // A generated request gets isolated local state, never a process signal
+        // handler or a token shared with any live invocation.
+        Ok(Self::new())
     }
 }

@@ -13,6 +13,19 @@ Reusable cancellation primitives for Teamy Rust tools.
   - `tracing-subscriber` layer that cancels a token after a matching span close
     or event message
 
+With the optional async feature, CancellationWait is a sticky, multi-consumer
+cancellation signal built on standard Rust wakers. It works without a particular
+async runtime. CancellationListener provides an unregistering, once-only
+callback registration, including notification when registered after a request.
+
+With the independent `deferral` feature, CancellationDeferral postpones
+cooperative stopping within one operation, including synchronous work. Token
+clones share that operation's deferrals; for_operation() starts an independent
+scope that shares the cancellation request. is_cancelled() always observes raw
+intent, as does cancelled().await with `async` enabled. bail_if_cancelled() and
+the async cancellable() helper honor live deferrals. CancellationError is
+available with either feature and preserves the original cancellation reason.
+
 ## Features
 
 - `ctrlc` (default)
@@ -24,6 +37,13 @@ Reusable cancellation primitives for Teamy Rust tools.
   - enables `StopAfterLayer`
 - `inheritance` (default)
   - enables parent/child cancellation propagation via `CancellationToken::child_token()`
+- `async`
+  - enables runtime-independent cancellation waiting and cancellable futures
+- `deferral`
+  - enables operation-local cancellation deferrals for synchronous or async work;
+    neither `async` nor `deferral` enables the other
+- `arbitrary`
+  - generates isolated, uncancelled tokens without signal handlers or live state
 - `figue`
   - enables `StopAfterArgs`, a `facet`/`figue` CLI argument struct for
     `--stop-after` span/log-message cancellation and `--stop-after-duration`
@@ -36,31 +56,15 @@ Reusable cancellation primitives for Teamy Rust tools.
 and not the subscriber integration layer, use `default-features = false,
 features = ["tracing"]`.
 
-## Upstream integration dependencies
+## Facet and Figue integration dependencies
 
-The optional `facet` and `figue` dependencies use official registry releases
-`0.50.0-rc.7` and `5.0.0-rc.6`. This integration branch tests them with
-workspace-root `[patch.crates-io]` overrides pinned to public, immutable commits:
-
-- Core Facet family: `a6101f92fa88ada6dedd80899140577e554bd5d3` from
-  [TeamDman/facet](https://github.com/TeamDman/facet/commit/a6101f92fa88ada6dedd80899140577e554bd5d3).
-- Figue and its attributes: `834293b7bc379f3502767aa6aee06958e99d8bb0` from
-  [TeamDman/figue](https://github.com/TeamDman/figue/commit/834293b7bc379f3502767aa6aee06958e99d8bb0),
-  including the transparent-scalar CLI support proposed in
-  [Figue PR #124](https://github.com/bearcove/figue/pull/124).
-
-These are upstream-plus-PR integration references, not floating branch pins.
-Cancellation's implementation does not use the unmerged Cow reflection APIs;
-the overrides keep its integration tests on the same dependency family as
-Cloud Terrastodon. Split-out packages such as `facet-format` and `facet-json`
-remain registry dependencies.
-
-Cargo only applies patches from the consuming workspace root. A downstream
-project does **not** inherit this patch block: ordinary consumers resolve the
-declared registry versions, while Cloud Terrastodon supplies its own matching
-root overrides to select the PR stack throughout its dependency graph. When
-the required changes are published upstream, update the normal dependencies
-and remove the temporary overrides together.
+The optional Facet and Figue integrations use published TeamDman forks:
+[teamy-facet](https://crates.io/crates/teamy-facet) at 0.50.0-rc.7 and
+[teamy-figue](https://crates.io/crates/teamy-figue) at 6.0.0-rc.1.
+These are separate packages from upstream
+[Facet](https://github.com/facet-rs/facet) and
+[Figue](https://github.com/bearcove/figue), with their existing Rust library names
+retained as dependency aliases. No Git patch is required.
 
 ## Usage
 
@@ -73,6 +77,50 @@ let token = CancellationToken::new();
 token.request_cancel("shutting down");
 token.bail_if_cancelled()?;
 ```
+
+Synchronous completion with feature `deferral`:
+
+```rust
+use teamy_cancellation::CancellationToken;
+
+let operation = CancellationToken::new().for_operation();
+operation.bail_if_cancelled()?;
+{
+    let _completion = operation.defer_cancellation("finishing required cleanup");
+    // Finish the synchronous operation and its required cleanup here.
+}
+operation.bail_if_cancelled()?;
+```
+
+Async cancellation with features `async` and `deferral`:
+
+```rust
+use teamy_cancellation::CancellationToken;
+
+let invocation = CancellationToken::new();
+let operation = invocation.for_operation();
+// Only wrap work that may safely be abandoned by dropping its future.
+let result: eyre::Result<()> = operation.cancellable(async {
+    // Enter before the irreversible phase, using this same operation token.
+    let _completion = operation.defer_cancellation("finishing mutation and cache invalidation");
+    // Await the mutation and its required completion work here.
+    Ok(())
+}).await;
+```
+
+A cancellation request wakes pending wrappers even while their work awaits
+unrelated I/O. Deferrals keep that operation polling until its required work
+finishes; other operation scopes remain responsive. Entering a deferral after
+cancellation can permit already-required cleanup. With tracing enabled, each
+live deferral logs its explanation once when cancellation is requested.
+
+Wrapping an outer async block does not make an unguarded inner block safe:
+cancellation drops the whole pending future. A deferral must belong to the
+same operation scope as every wrapper that may drop that work. Ordinary future
+dropping, task aborts, and process termination can still interrupt a deferral;
+the owner must keep polling it. The wrapper cannot interrupt a running poll or
+automatically inspect each internal await. If a poll completes, the operation's
+original result wins over concurrent cancellation.
 
 Token with cancellation hook:
 
