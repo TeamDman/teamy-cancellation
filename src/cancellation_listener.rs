@@ -22,9 +22,8 @@ impl Drop for CancellationListener {
 }
 
 impl fmt::Debug for CancellationListener {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CancellationListener")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancellationListener")
             .field("notified", &self.state.is_notified())
             .finish_non_exhaustive()
     }

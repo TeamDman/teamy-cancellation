@@ -21,9 +21,8 @@ impl Drop for CancellationRegistration {
 }
 
 impl fmt::Debug for CancellationRegistration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CancellationRegistration")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancellationRegistration")
             .field("id", &self.id)
             .finish_non_exhaustive()
     }

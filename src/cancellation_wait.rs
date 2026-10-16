@@ -32,14 +32,14 @@ impl CancellationWait {
 impl Future for CancellationWait {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         if this.token.is_cancelled() {
             this.registrations.take();
             return Poll::Ready(());
         }
 
-        this.waker.register(context.waker());
+        this.waker.register(cx.waker());
         if this.registrations.is_none() {
             this.registrations = Some(this.token.register_waiter(&this.waker));
         }
@@ -55,9 +55,8 @@ impl Future for CancellationWait {
 }
 
 impl fmt::Debug for CancellationWait {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CancellationWait")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancellationWait")
             .field("token", &self.token)
             .finish_non_exhaustive()
     }

@@ -136,7 +136,7 @@ impl CancellationToken {
     /// already requested token invokes the callback before this method returns.
     /// Dropping the returned handle unregisters the listener; repeated requests
     /// do not repeat its callback. Callbacks run outside internal locks.
-    #[must_use]
+    #[must_use = "Keep the listener alive to receive its notification"]
     pub fn register_listener(
         &self,
         callback: impl Fn(&str) + Send + Sync + 'static,
@@ -172,7 +172,7 @@ impl CancellationToken {
 
     /// Wait for sticky requested cancellation without needing a runtime.
     #[cfg(feature = "async")]
-    #[must_use]
+    #[must_use = "Cancellation waits do nothing unless polled or awaited"]
     pub fn cancelled(&self) -> CancellationWait {
         CancellationWait::new(self.clone())
     }
@@ -221,9 +221,8 @@ impl CancellationToken {
 }
 
 impl fmt::Debug for CancellationToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CancellationToken")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancellationToken")
             .field("is_cancelled", &self.is_cancelled())
             .finish_non_exhaustive()
     }
