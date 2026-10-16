@@ -6,7 +6,11 @@ Reusable cancellation primitives for Teamy Rust tools.
 
 - `CancellationToken`
   - shared cancellation state with `request_cancel`, `is_cancelled`,
-    `cancellation_reason`, `bail_if_cancelled`, and optional cancellation hooks
+    `cancellation_reason`, listeners, and optional cancellation hooks
+- `CancellationScope`
+  - callback/future-owned execution policy, linked children, and `bail_if_cancelled`
+- `CancellationError`
+  - typed cancellation reason returned by scoped execution
 - `CtrlCHandler` with feature `ctrlc`
   - configurable process-wide Ctrl+C installer, including double-Ctrl+C force-exit policy
 - `StopAfterLayer` with feature `tracing-subscriber`
@@ -18,13 +22,20 @@ cancellation signal built on standard Rust wakers. It works without a particular
 async runtime. CancellationListener provides an unregistering, once-only
 callback registration, including notification when registered after a request.
 
-With the independent `deferral` feature, CancellationDeferral postpones
-cooperative stopping within one operation, including synchronous work. Token
-clones share that operation's deferrals; for_operation() starts an independent
-scope that shares the cancellation request. is_cancelled() always observes raw
-intent, as does cancelled().await with `async` enabled. bail_if_cancelled() and
-the async cancellable() helper honor live deferrals. CancellationError is
-available with either feature and preserves the original cancellation reason.
+Execution policy belongs to `CancellationScope`, supplied by a bounded callback
+or future. Nested helpers create linked child scopes automatically. A protected
+region shields its descendants and keeps its enclosing scope wrappers polling;
+independent sibling scopes remain cancellable. Scope handles can be cloned, but
+only the executing callback/future owns protection and its lifetime.
+
+The independent `deferral` feature supports synchronous protected callbacks.
+Together with `async`, it also supports protected futures across suspension.
+`CancellationToken` remains the shared request/reason/notification handle;
+`is_cancelled()` and `cancelled().await` always observe raw intent.
+`CancellationScope`, synchronous `with_scope`, and `CancellationError` are
+available without optional features. The error preserves the request's reason.
+Operation code uses its supplied scope's `bail_if_cancelled()` so that required
+completion is respected.
 
 ## Features
 
@@ -38,12 +49,13 @@ available with either feature and preserves the original cancellation reason.
 - `inheritance` (default)
   - enables parent/child cancellation propagation via `CancellationToken::child_token()`
 - `async`
-  - enables runtime-independent cancellation waiting and cancellable futures
+  - enables runtime-independent cancellation waiting and future-owned execution scopes
 - `deferral`
-  - enables operation-local cancellation deferrals for synchronous or async work;
-    neither `async` nor `deferral` enables the other
+  - enables bounded protected scopes for synchronous work, and protected futures
+    when `async` is also enabled; neither feature enables the other
 - `arbitrary`
-  - generates isolated, uncancelled tokens without signal handlers or live state
+  - generates isolated, uncancelled tokens and inert request-scope placeholders,
+    without signal handlers or live state
 - `figue`
   - enables `StopAfterArgs`, a `facet`/`figue` CLI argument struct for
     `--stop-after` span/log-message cancellation and `--stop-after-duration`
@@ -75,7 +87,7 @@ use teamy_cancellation::CancellationToken;
 
 let token = CancellationToken::new();
 token.request_cancel("shutting down");
-token.bail_if_cancelled()?;
+assert!(token.is_cancelled());
 ```
 
 Synchronous completion with feature `deferral`:
@@ -83,14 +95,21 @@ Synchronous completion with feature `deferral`:
 ```rust
 use teamy_cancellation::CancellationToken;
 
-let operation = CancellationToken::new().for_operation();
-operation.bail_if_cancelled()?;
-{
-    let _completion = operation.defer_cancellation("finishing required cleanup");
-    // Finish the synchronous operation and its required cleanup here.
-}
-operation.bail_if_cancelled()?;
+let token = CancellationToken::new();
+let result: eyre::Result<()> = token.with_scope(|scope| {
+    scope.with_deferral("finishing related writes", |protected| {
+        // Perform the related writes using this protected scope.
+        protected.bail_if_cancelled()?;
+        Ok(())
+    })?;
+    scope.bail_if_cancelled()?;
+    Ok(())
+});
 ```
+
+The callback owns the scope. Returning an unpolled future from a synchronous
+callback does not extend protection: its scope closes as soon as the callback
+returns. Use the async helpers for work that suspends.
 
 Async cancellation with features `async` and `deferral`:
 
@@ -98,29 +117,93 @@ Async cancellation with features `async` and `deferral`:
 use teamy_cancellation::CancellationToken;
 
 let invocation = CancellationToken::new();
-let operation = invocation.for_operation();
-// Only wrap work that may safely be abandoned by dropping its future.
-let result: eyre::Result<()> = operation.cancellable(async {
-    // Enter before the irreversible phase, using this same operation token.
-    let _completion = operation.defer_cancellation("finishing mutation and cache invalidation");
-    // Await the mutation and its required completion work here.
+let result: eyre::Result<()> = invocation.cancellable_scope(|scope| async move {
+    scope.cancellable_scope(|read| async move {
+        // Await an independently cancellable read using `read`.
+        read.bail_if_cancelled()?;
+        Ok::<_, eyre::Report>(())
+    }).await?;
+
+    scope.deferred("finishing mutation and cache invalidation", |protected| async move {
+        // Await the mutation and all required completion using `protected`.
+        // Deeper requests create linked children from this supplied scope.
+        protected.bail_if_cancelled()?;
+        Ok::<_, eyre::Report>(())
+    }).await?;
+
+    scope.bail_if_cancelled()?;
     Ok(())
 }).await;
 ```
 
-A cancellation request wakes pending wrappers even while their work awaits
-unrelated I/O. Deferrals keep that operation polling until its required work
-finishes; other operation scopes remain responsive. Entering a deferral after
-cancellation can permit already-required cleanup. With tracing enabled, each
-live deferral logs its explanation once when cancellation is requested.
+Use `token.with_async_scope(|scope| async move { ... })` for an application or
+shutdown coordinator that owns its cancellation checkpoints and cleanup. After
+admission this helper keeps polling the body when cancellation is requested;
+opt into automatic stopping around its reads or jobs with
+`scope.cancellable_scope(...)`. This lets the coordinator observe a child's
+cancellation error and finish restoring its resources. Both helpers reject new
+optional work when cancellation was already requested.
 
-Wrapping an outer async block does not make an unguarded inner block safe:
-cancellation drops the whole pending future. A deferral must belong to the
-same operation scope as every wrapper that may drop that work. Ordinary future
-dropping, task aborts, and process termination can still interrupt a deferral;
-the owner must keep polling it. The wrapper cannot interrupt a running poll or
-automatically inspect each internal await. If a poll completes, the operation's
-original result wins over concurrent cancellation.
+With `async` and `inheritance`, `scope.cancellable_child_scope(factory)` returns
+`(control_token, future)`: the token can cancel that job without cancelling its
+parent or siblings. Parent requests still propagate, and the child retains its
+scope ownership links so deeply nested deferrals protect the required owners.
+`with_async_child_scope` provides the same separate signal for a cooperative
+coordinator. Pass the factory's supplied scope into the job's requests.
+
+`CancellationScope::unbound()`, `Default`, and `Arbitrary` produce an isolated,
+already-closed placeholder for reflected request input. They cannot run work or
+required cleanup. Invocation infrastructure must bind the supplied live scope
+before executing generated requests; a placeholder never substitutes for an
+execution owner.
+
+Each async factory runs only after first-poll admission. An unpolled deferred
+future has no active protection. Cancellation before admission prevents optional
+work from beginning. Protection is inherited only within the protected subtree;
+ancestors retain their owning futures without shielding ordinary sibling scopes.
+Once the protected body completes, protection ends even if scope clones survive.
+Saved handles cannot admit new work after their owner closes.
+
+For cleanup already owed when cancellation is requested, use
+`scope.finish_required(reason, |protected| async move { ... })` or synchronous
+`scope.finish_required_sync(reason, |protected| { ... })`. These allow admission
+after a request but cannot reopen a closed owner. Prefer protecting a mutation
+and its cleanup together before the irreversible phase. Each active protected
+scope acknowledges cancellation once with its explanation and caller location
+when tracing is enabled; raw listeners still receive the request immediately.
+
+A cancellation request wakes pending wrappers while their work awaits unrelated
+I/O. Checks occur at wrapper poll boundaries, not every syntactic await, and
+cannot interrupt a running poll. A body's original Ready success or error wins
+over concurrent cancellation. Completing a protected body preserves its result;
+pending cancellation is observed at the next scope checkpoint or child admission.
+Ordinary errors still follow the body's Rust control flow; protection does not
+force later cleanup statements to run after `?` returns an error.
+
+Only cancellation generated by these scope helpers honors the ownership links.
+Explicitly dropping an owner, task aborts, process termination, or an early return
+from `select!`/`try_join!` can still destroy protected work. Parallel required work
+needs a coordinator that deliberately retains and drains protected children on
+those paths. Starting another root from a raw token shares intent but creates
+independent ownership; nested operations should use the supplied scope instead.
+Use each callback's supplied child handle rather than a captured ancestor: scope
+links describe the ownership you explicitly establish, not the async call stack.
+
+## Migrating from token-owned deferrals
+
+This is a breaking API cutover. The old APIs are removed rather than retaining
+an unlinked compatibility path:
+
+| Previous API | Scoped replacement |
+| --- | --- |
+| `token.cancellable(future)` / `CancellableFuture` | `token.cancellable_scope(|scope| future)` / `CancellableScopeFuture` |
+| `token.for_operation()` | `scope.cancellable_scope(|child| future)` or synchronous `scope.with_scope(...)` |
+| `token.defer_cancellation(reason)` / `CancellationDeferral` | `scope.deferred(reason, |protected| future)` or `scope.with_deferral(...)` |
+| `token.bail_if_cancelled()` and token-based SDK checkpoints | Pass `CancellationScope` and check that supplied scope |
+
+Raw token cloning, child-token request propagation, listeners, Ctrl+C handling,
+and raw cancellation waiting keep their signal-only roles. There is no automatic
+executor, tracing-span, or task-local ownership inference.
 
 Token with cancellation hook:
 
@@ -140,7 +223,11 @@ Install Ctrl+C handling:
 use teamy_cancellation::CtrlCHandler;
 
 let token = CtrlCHandler::default().install()?;
-token.bail_if_cancelled()?;
+let result: eyre::Result<()> = token.with_scope(|scope| {
+    // Pass `scope` into synchronous operation implementations.
+    scope.bail_if_cancelled()?;
+    Ok(())
+});
 ```
 
 Customize Ctrl+C handling:

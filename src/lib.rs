@@ -17,22 +17,20 @@ mod cancellation_waker;
 #[cfg(feature = "async")]
 pub use cancellation_wait::CancellationWait;
 
-#[cfg(feature = "deferral")]
-mod cancellation_deferral;
-#[cfg(feature = "deferral")]
-mod cancellation_deferral_state;
-#[cfg(feature = "deferral")]
-mod cancellation_deferral_storage;
-#[cfg(feature = "deferral")]
-pub use cancellation_deferral::CancellationDeferral;
-#[cfg(any(feature = "async", feature = "deferral"))]
 mod cancellation_error;
-#[cfg(any(feature = "async", feature = "deferral"))]
 pub use cancellation_error::CancellationError;
+mod cancellation_scope;
+mod cancellation_scope_kind;
+mod cancellation_scope_owner;
+mod cancellation_scope_record;
+mod cancellation_scope_state;
+mod cancellation_scope_status;
+mod cancellation_scope_tree;
+pub use cancellation_scope::CancellationScope;
 #[cfg(feature = "async")]
-mod cancellable_future;
+mod cancellable_scope_future;
 #[cfg(feature = "async")]
-pub use cancellable_future::CancellableFuture;
+pub use cancellable_scope_future::CancellableScopeFuture;
 
 #[cfg(feature = "ctrlc")]
 mod ctrlc_handler;

@@ -1,3 +1,5 @@
+#[cfg(feature = "arbitrary")]
+use arbitrary::Arbitrary;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::sync::Mutex;
@@ -127,7 +129,6 @@ fn ancestor_and_local_requests_notify_a_descendant_listener_once() {
 #[cfg(feature = "arbitrary")]
 #[test]
 fn arbitrary_tokens_have_isolated_uncancelled_state() {
-    use arbitrary::Arbitrary;
     let mut input = arbitrary::Unstructured::new(&[]);
     let first = CancellationToken::arbitrary(&mut input).unwrap();
     let second = CancellationToken::arbitrary(&mut input).unwrap();

@@ -9,7 +9,6 @@ use std::task::Context;
 use std::task::Poll;
 use std::task::Wake;
 use std::task::Waker;
-use teamy_cancellation::CancellationError;
 use teamy_cancellation::CancellationToken;
 
 #[derive(Default)]
@@ -129,19 +128,6 @@ fn hook_panic_cannot_hide_cancellation_or_prevent_wakeups() {
     assert_eq!(token.cancellation_reason().as_deref(), Some("stop"));
     assert_eq!(counter.calls(), 1);
     assert!(poll_with(&mut wait, &counter).is_ready());
-}
-
-#[test]
-fn synchronous_checkpoint_preserves_the_typed_cancellation_error() {
-    let token = CancellationToken::new();
-    token.request_cancel("typed stop");
-
-    let error = token.bail_if_cancelled().unwrap_err();
-
-    assert_eq!(
-        error.downcast_ref::<CancellationError>().unwrap().reason,
-        "typed stop"
-    );
 }
 
 #[cfg(feature = "inheritance")]

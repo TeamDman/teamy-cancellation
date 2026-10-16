@@ -21,13 +21,6 @@ fn cancellation_token_keeps_first_reason() {
     token.request_cancel("second");
 
     assert_eq!(token.cancellation_reason().as_deref(), Some("first"));
-    assert!(
-        token
-            .bail_if_cancelled()
-            .unwrap_err()
-            .to_string()
-            .contains("first")
-    );
 }
 
 #[test]

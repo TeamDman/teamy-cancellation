@@ -1,8 +1,6 @@
 use crate::CancellationListener;
 #[cfg(feature = "async")]
 use crate::CancellationWait;
-#[cfg(feature = "deferral")]
-use crate::cancellation_deferral_state::CancellationDeferralState;
 use crate::cancellation_inner::CancellationInner;
 use crate::cancellation_listener_state::CancellationListenerState;
 use crate::cancellation_registration::CancellationRegistration;
@@ -12,14 +10,16 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-/// Shared cancellation intent with optional operation-local deferrals.
+/// Shared cancellation intent, reasons, and notifications.
+///
+/// Execution ownership and protected completion belong to `CancellationScope`,
+/// whose checkpoints respect required completion. Raw token observation always
+/// reports the cancellation request without postponement.
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "facet", derive(facet::Facet))]
 #[cfg_attr(feature = "facet", facet(opaque))]
 pub struct CancellationToken {
     inner: Arc<CancellationInner>,
-    #[cfg(feature = "deferral")]
-    pub(crate) deferral_state: Arc<CancellationDeferralState>,
 }
 
 impl CancellationToken {
@@ -37,21 +37,6 @@ impl CancellationToken {
                 on_cancel_request: Some(Arc::new(on_cancel_request)),
                 ..CancellationInner::default()
             }),
-            #[cfg(feature = "deferral")]
-            deferral_state: Arc::default(),
-        }
-    }
-
-    /// Share this cancellation request state with a new operation-local scope.
-    ///
-    /// Clones of the returned token share deferrals; independent calls have
-    /// independent deferrals. Cancellation remains shared with this token.
-    #[cfg(feature = "deferral")]
-    #[must_use]
-    pub fn for_operation(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            deferral_state: Arc::default(),
         }
     }
 
@@ -63,8 +48,6 @@ impl CancellationToken {
                 parent: Some(self.clone()),
                 ..CancellationInner::default()
             }),
-            #[cfg(feature = "deferral")]
-            deferral_state: Arc::default(),
         }
     }
 
@@ -129,7 +112,7 @@ impl CancellationToken {
     }
 
     /// Observe raw cancellation intent, including an inherited parent's request.
-    /// Operation deferrals do not change this flag.
+    /// Execution-scope protection does not change this flag.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::Acquire)
@@ -192,39 +175,6 @@ impl CancellationToken {
     #[must_use]
     pub fn cancelled(&self) -> CancellationWait {
         CancellationWait::new(self.clone())
-    }
-
-    /// # Errors
-    /// Returns the cancellation reason when this operation may stop. With the
-    /// `deferral` feature, a live guard allows required cleanup to finish.
-    #[track_caller]
-    pub fn bail_if_cancelled(&self) -> eyre::Result<()> {
-        if self.should_cancel() {
-            #[cfg(any(feature = "async", feature = "deferral"))]
-            return Err(crate::CancellationError::from_token(self).into());
-            #[cfg(not(any(feature = "async", feature = "deferral")))]
-            {
-                let reason = self
-                    .cancellation_reason()
-                    .unwrap_or_else(|| String::from("Operation cancelled"));
-                eyre::bail!("{reason}");
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn should_cancel(&self) -> bool {
-        if !self.is_cancelled() {
-            return false;
-        }
-        #[cfg(feature = "deferral")]
-        {
-            !self.deferral_state.is_deferred()
-        }
-        #[cfg(not(feature = "deferral"))]
-        {
-            true
-        }
     }
 
     fn parent(&self) -> Option<Self> {
