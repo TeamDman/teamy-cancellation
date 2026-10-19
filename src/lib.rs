@@ -1,3 +1,12 @@
+#[cfg(feature = "io")]
+mod cancellable_writer;
+#[cfg(feature = "io")]
+mod cancellation_write_ext;
+#[cfg(feature = "io")]
+pub use cancellable_writer::CancellableWriter;
+#[cfg(feature = "io")]
+pub use cancellation_write_ext::CancellationWriteExt;
+
 mod cancellation_inner;
 mod cancellation_listener;
 mod cancellation_listener_state;

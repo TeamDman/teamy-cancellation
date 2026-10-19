@@ -53,6 +53,9 @@ completion is respected.
 - `deferral`
   - enables bounded protected scopes for synchronous work, and protected futures
     when `async` is also enabled; neither feature enables the other
+- `io`
+  - enables synchronous `CancellationWriteExt` helpers and `CancellableWriter`
+    independently of `async` and `deferral`
 - `arbitrary`
   - generates isolated, uncancelled tokens and inert request-scope placeholders,
     without signal handlers or live state
@@ -110,6 +113,35 @@ let result: eyre::Result<()> = token.with_scope(|scope| {
 The callback owns the scope. Returning an unpolled future from a synchronous
 callback does not extend protection: its scope closes as soon as the callback
 returns. Use the async helpers for work that suspends.
+
+Synchronous output with feature `io`:
+
+```rust
+use std::io::Write;
+use teamy_cancellation::CancellableWriter;
+use teamy_cancellation::CancellationToken;
+use teamy_cancellation::CancellationWriteExt;
+
+let token = CancellationToken::new();
+let mut bytes = Vec::new();
+let result: eyre::Result<()> = token.with_scope(|scope| {
+    bytes.write_all_with_cancellation(b"first record\n", &scope)?;
+    let mut writer = CancellableWriter::new(&mut bytes, &scope);
+    writeln!(writer, "second record")?;
+    writer.flush()?;
+    Ok(())
+});
+```
+
+The helpers check the supplied scope before each write and interrupted retry,
+limiting individual write requests to 64 KiB. The adapter also checks `flush`
+and integrates with serializers and other APIs accepting `std::io::Write`.
+Cancellation is returned as `io::ErrorKind::Other` containing a `CancellationError`
+payload retrievable with `io::Error::get_ref`; it is not `Interrupted`, which
+ordinary `write_all` implementations retry. Deferral remains effective. Written bytes
+are retained, so cancellation may leave partial output. These synchronous
+helpers cannot interrupt an underlying write or flush that is blocked; they
+check again when control returns and another write is needed.
 
 Async cancellation with features `async` and `deferral`:
 
