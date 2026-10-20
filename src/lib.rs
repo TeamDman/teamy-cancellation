@@ -1,9 +1,13 @@
 #[cfg(feature = "io")]
 mod cancellable_writer;
 #[cfg(feature = "io")]
+mod cancellation_io_error_ext;
+#[cfg(feature = "io")]
 mod cancellation_write_ext;
 #[cfg(feature = "io")]
 pub use cancellable_writer::CancellableWriter;
+#[cfg(feature = "io")]
+pub use cancellation_io_error_ext::CancellationIoErrorExt;
 #[cfg(feature = "io")]
 pub use cancellation_write_ext::CancellationWriteExt;
 
@@ -28,6 +32,8 @@ pub use cancellation_wait::CancellationWait;
 
 mod cancellation_error;
 pub use cancellation_error::CancellationError;
+mod cancellation_report_ext;
+pub use cancellation_report_ext::CancellationReportExt;
 mod cancellation_scope;
 mod cancellation_scope_kind;
 mod cancellation_scope_owner;

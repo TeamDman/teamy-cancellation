@@ -6,22 +6,18 @@ use std::future::pending;
 #[cfg(all(feature = "deferral", feature = "inheritance"))]
 use std::future::poll_fn;
 use std::pin::Pin;
+#[cfg(all(feature = "deferral", feature = "inheritance"))]
 use std::sync::Arc;
 #[cfg(all(feature = "deferral", feature = "inheritance"))]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 #[cfg(feature = "arbitrary")]
 use teamy_cancellation::CancellationScope;
 use teamy_cancellation::{CancellationError, CancellationToken};
 
-struct NoopWake;
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
 fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
-    let waker = Waker::from(Arc::new(NoopWake));
-    future.poll(&mut Context::from_waker(&waker))
+    future.poll(&mut Context::from_waker(Waker::noop()))
 }
 
 #[test]
@@ -74,11 +70,11 @@ fn independent_child_cancellation_and_deep_protection_have_distinct_ownership() 
         });
         let mut protected = Box::pin(protected);
         poll_fn(move |context| {
-            if !stopped.load(Ordering::SeqCst) {
-                if let Poll::Ready(result) = selected.as_mut().poll(context) {
-                    assert_eq!(result.unwrap_err().reason, "cancel only the selected child");
-                    stopped.store(true, Ordering::SeqCst);
-                }
+            if !stopped.load(Ordering::SeqCst)
+                && let Poll::Ready(result) = selected.as_mut().poll(context)
+            {
+                assert_eq!(result.unwrap_err().reason, "cancel only the selected child");
+                stopped.store(true, Ordering::SeqCst);
             }
             protected.as_mut().poll(context)
         })

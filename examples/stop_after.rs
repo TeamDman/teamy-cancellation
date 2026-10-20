@@ -19,15 +19,15 @@ fn main() -> eyre::Result<()> {
     let token = CancellationToken::new();
 
     if args.stop_after_duration.is_some() {
-        run_timed_demo(token, &args)?;
+        run_timed_demo(&token, &args)?;
     } else {
-        run_span_demo(token, args.stop_after_span.as_deref());
+        run_span_demo(&token, args.stop_after_span.as_deref());
     }
 
     Ok(())
 }
 
-fn run_timed_demo(token: CancellationToken, args: &StopAfterArgs) -> eyre::Result<()> {
+fn run_timed_demo(token: &CancellationToken, args: &StopAfterArgs) -> eyre::Result<()> {
     let duration = args
         .stop_after_duration()?
         .expect("duration should exist before running timed demo");
@@ -53,7 +53,7 @@ fn run_timed_demo(token: CancellationToken, args: &StopAfterArgs) -> eyre::Resul
     Ok(())
 }
 
-fn run_span_demo(token: CancellationToken, stop_after_span: Option<&str>) {
+fn run_span_demo(token: &CancellationToken, stop_after_span: Option<&str>) {
     let stop_after_span = stop_after_span.unwrap_or("job_stage_2_complete");
     let subscriber =
         tracing_subscriber::registry().with(StopAfterLayer::new(stop_after_span, token.clone()));

@@ -11,6 +11,10 @@ Reusable cancellation primitives for Teamy Rust tools.
   - callback/future-owned execution policy, linked children, and `bail_if_cancelled`
 - `CancellationError`
   - typed cancellation reason returned by scoped execution
+- `CancellationReportExt`
+  - recognize cancellation in `eyre::Report` and normalize it into typed context
+- `CancellationIoErrorExt` with feature `io`
+  - borrow, mutate, or consume a cancellation stored directly in an I/O error
 - `CtrlCHandler` with feature `ctrlc`
   - configurable process-wide Ctrl+C installer, including double-Ctrl+C force-exit policy
 - `StopAfterLayer` with feature `tracing-subscriber`
@@ -55,7 +59,7 @@ completion is respected.
     when `async` is also enabled; neither feature enables the other
 - `io`
   - enables synchronous `CancellationWriteExt` helpers and `CancellableWriter`
-    independently of `async` and `deferral`
+    plus `CancellationIoErrorExt`, independently of `async` and `deferral`
 - `arbitrary`
   - generates isolated, uncancelled tokens and inert request-scope placeholders,
     without signal handlers or live state
@@ -73,7 +77,7 @@ features = ["tracing"]`.
 
 ## Facet and Figue integration dependencies
 
-Version 0.6.0's optional Facet and Figue integrations use published TeamDman forks:
+Version 0.7.0's optional Facet and Figue integrations use published TeamDman forks:
 [teamy-facet](https://crates.io/crates/teamy-facet) at 0.50.0-rc.7 and
 [teamy-figue](https://crates.io/crates/teamy-figue) at 6.0.0-rc.4.
 Figue uses Teamy JSON and Format 0.50.0-rc.8; the core Facet crates remain at
@@ -139,11 +143,58 @@ The helpers check the supplied scope before each write and interrupted retry,
 limiting individual write requests to 64 KiB. The adapter also checks `flush`
 and integrates with serializers and other APIs accepting `std::io::Write`.
 Cancellation is returned as `io::ErrorKind::Other` containing a `CancellationError`
-payload retrievable with `io::Error::get_ref`; it is not `Interrupted`, which
+payload accessible through `CancellationIoErrorExt`; it is not `Interrupted`, which
 ordinary `write_all` implementations retry. Deferral remains effective. Written bytes
 are retained, so cancellation may leave partial output. These synchronous
 helpers cannot interrupt an underlying write or flush that is blocked; they
 check again when control returns and another write is needed.
+
+Use `as_cancellation()` or `as_cancellation_mut()` to borrow the direct payload.
+When owning the I/O error, prefer `into_cancellation()` to moving through a
+temporary or default placeholder:
+
+```rust
+use std::io;
+use teamy_cancellation::CancellationError;
+use teamy_cancellation::CancellationIoErrorExt;
+
+let error = io::Error::other(CancellationError::new("output cancelled"));
+let cancellation = error.into_cancellation().expect("direct cancellation payload");
+assert_eq!(cancellation.reason, "output cancelled");
+```
+
+Consuming extraction moves the original cancellation without cloning its reason.
+Success removes the I/O wrapper and its error kind; failure returns the original
+I/O error unchanged. These methods inspect only the direct boxed payload, never
+the error's source chain.
+
+Cancellation in an `eyre::Report` is available without optional features:
+
+```rust
+use teamy_cancellation::CancellationError;
+use teamy_cancellation::CancellationReportExt;
+
+let report = eyre::Report::new(CancellationError::new("work cancelled"))
+    .wrap_err("finishing the command");
+assert!(report.is_cancellation());
+assert_eq!(report.as_cancellation().unwrap().reason, "work cancelled");
+let report = report.normalize_cancellation();
+assert!(report.downcast_ref::<CancellationError>().is_some());
+```
+
+`CancellationReportExt` prefers native typed report downcasts, including typed
+contexts, then follows exposed `Error::source()` chains. With `io`, it also
+checks a directly downcastable I/O context and traverses boxed I/O payloads,
+including nested I/O wrappers. It does not inspect hidden error graphs or infer
+cancellation from error messages.
+
+`normalize_cancellation()` leaves reports with native typed cancellation and
+unrelated reports unchanged. For cancellation found through sources or I/O
+payloads, it clones the recognized cancellation into an outer typed context,
+preserving the original report, source chain, handler, and downcasts. The reason
+becomes the outer display message. Repeated normalization adds no further context.
+Report helpers expose shared access only; the direct I/O extension provides
+mutable access and consuming extraction when the I/O wrapper itself is owned.
 
 Async cancellation with features `async` and `deferral`:
 
