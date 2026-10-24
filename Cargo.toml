@@ -1,6 +1,6 @@
 [package]
 name = "teamy-cancellation"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 authors = ["TeamDman"]
 description = "Reusable cancellation primitives for Teamy Rust tools."
@@ -19,7 +19,7 @@ arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
 ctrlc = { version = "3.5.1", optional = true }
 eyre = "0.6.12"
 facet = { package = "teamy-facet", version = "=0.50.0-rc.7", optional = true }
-figue = { package = "teamy-figue", version = "=6.0.0-rc.4", features = ["arbitrary"], optional = true }
+figue = { package = "teamy-figue", version = "=6.0.0-rc.5", features = ["arbitrary"], optional = true }
 humantime = { version = "2.3.0", optional = true }
 tracing = { version = "0.1.41", optional = true }
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["registry"], optional = true }
