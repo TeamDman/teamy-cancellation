@@ -73,6 +73,25 @@ fn cancellation_wakes_a_scope_waiting_on_unrelated_work() {
     assert_eq!(error.reason, "user stopped a slow read");
 }
 
+#[cfg(feature = "inheritance")]
+#[test]
+fn parent_cancellation_wakes_a_pending_scope_and_preserves_its_typed_reason() {
+    let parent = CancellationToken::new();
+    let child = parent.child_token();
+    let mut future = Box::pin(child.cancellable_scope(|_| pending::<eyre::Result<()>>()));
+    let counter = Arc::default();
+    assert!(poll_once(future.as_mut(), &counter).is_pending());
+
+    parent.request_cancel("fixture shutdown");
+
+    assert!(counter.0.load(Ordering::SeqCst) > 0);
+    let Poll::Ready(Err(error)) = poll_once(future.as_mut(), &counter) else {
+        panic!("Parent cancellation must stop the pending child scope");
+    };
+    assert!(error.downcast_ref::<CancellationError>().is_some());
+    assert_eq!(error.to_string(), "fixture shutdown");
+}
+
 #[test]
 fn a_scope_can_borrow_and_update_caller_owned_values() {
     let token = CancellationToken::new();
