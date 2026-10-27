@@ -5,13 +5,20 @@ use teamy_cancellation::StopAfterArgs;
 
 #[test]
 fn stop_after_arguments_preserve_cli_names() {
-    let args: StopAfterArgs =
-        figue::from_slice(&["--stop-after", "fixture_span", "--stop-after-duration", "1ms"])
-            .unwrap();
+    let args: StopAfterArgs = figue::from_slice(&[
+        "--stop-after",
+        "fixture_span",
+        "--stop-after-duration",
+        "1ms",
+    ])
+    .unwrap();
 
     assert_eq!(args.stop_after_span.as_deref(), Some("fixture_span"));
     assert_eq!(args.stop_after_duration.as_deref(), Some("1ms"));
-    assert!(args.stop_after_span_layer(CancellationToken::new()).is_some());
+    assert!(
+        args.stop_after_span_layer(CancellationToken::new())
+            .is_some()
+    );
 }
 
 #[test]
