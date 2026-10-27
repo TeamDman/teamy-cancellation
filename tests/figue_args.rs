@@ -29,7 +29,8 @@ fn invalid_duration_is_rejected_without_cancelling() {
     };
     let token = CancellationToken::new();
 
-    args.start_stop_after_duration_thread(token.clone())
+    _ = args
+        .start_stop_after_duration_thread(token.clone())
         .expect_err("invalid duration");
 
     assert!(!token.is_cancelled());
