@@ -5,9 +5,7 @@ use std::fmt;
 use std::io;
 use std::ptr;
 use teamy_cancellation::CancellationError;
-#[cfg(feature = "io")]
-use teamy_cancellation::CancellationIoErrorExt;
-use teamy_cancellation::CancellationReportExt;
+use teamy_cancellation::CancellationErrorExt;
 
 #[derive(Debug)]
 struct SourcedFailure {
@@ -39,7 +37,7 @@ impl fmt::Display for MessageOnlyFailure {
 impl Error for MessageOnlyFailure {}
 
 #[test]
-fn native_typed_context_takes_precedence_and_normalization_is_idempotent() {
+fn native_typed_context_takes_precedence() {
     let report = Report::new(SourcedFailure {
         message: "custom wrapper",
         source: Box::new(CancellationError::new("inner source reason")),
@@ -54,24 +52,19 @@ fn native_typed_context_takes_precedence_and_normalization_is_idempotent() {
     );
     assert!(report.is_cancellation());
 
-    let normalized = report.normalize_cancellation().normalize_cancellation();
-
-    assert_eq!(normalized.to_string(), "outer report context");
+    assert_eq!(report.to_string(), "outer report context");
     assert_eq!(
-        normalized.as_cancellation().unwrap().reason.as_ptr(),
+        report.as_cancellation().unwrap().reason.as_ptr(),
         original_reason
     );
     assert_eq!(
-        normalized
-            .chain()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
+        report.chain().map(ToString::to_string).collect::<Vec<_>>(),
         original_chain
     );
 }
 
 #[test]
-fn normalizing_a_custom_source_preserves_the_original_report_and_handler() {
+fn recognizing_a_custom_source_preserves_the_original_report_and_handler() {
     let report = Report::new(SourcedFailure {
         message: "adapter failed",
         source: Box::new(CancellationError::new("source cancellation")),
@@ -86,21 +79,15 @@ fn normalizing_a_custom_source_preserves_the_original_report_and_handler() {
         "source cancellation"
     );
 
-    let normalized = report.normalize_cancellation();
-
-    assert_eq!(normalized.to_string(), "source cancellation");
-    assert!(normalized.downcast_ref::<CancellationError>().is_some());
+    assert_eq!(report.to_string(), "rendering a report");
+    assert!(report.downcast_ref::<CancellationError>().is_none());
     assert!(ptr::eq(
         original_source,
-        normalized.downcast_ref::<SourcedFailure>().unwrap()
+        report.downcast_ref::<SourcedFailure>().unwrap()
     ));
-    assert!(ptr::eq(original_handler, normalized.handler()));
+    assert!(ptr::eq(original_handler, report.handler()));
     assert_eq!(
-        normalized
-            .chain()
-            .skip(1)
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
+        report.chain().map(ToString::to_string).collect::<Vec<_>>(),
         original_chain
     );
 }
@@ -115,42 +102,29 @@ fn cancellation_words_do_not_change_an_unrelated_report() {
     assert!(!report.is_cancellation());
     assert!(report.as_cancellation().is_none());
 
-    let normalized = report.normalize_cancellation();
-
-    assert!(normalized.downcast_ref::<CancellationError>().is_none());
+    assert!(report.downcast_ref::<CancellationError>().is_none());
     assert!(ptr::eq(
         original_error,
-        normalized.downcast_ref::<MessageOnlyFailure>().unwrap()
+        report.downcast_ref::<MessageOnlyFailure>().unwrap()
     ));
-    assert!(ptr::eq(original_handler, normalized.handler()));
+    assert!(ptr::eq(original_handler, report.handler()));
     assert_eq!(
-        normalized
-            .chain()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
+        report.chain().map(ToString::to_string).collect::<Vec<_>>(),
         original_chain
     );
 }
 
 #[cfg(feature = "io")]
 #[test]
-fn direct_io_cancellation_normalizes_without_losing_the_original_io_payload() {
+fn direct_io_cancellation_preserves_the_original_io_payload() {
     let report = Report::new(io::Error::other(CancellationError::new("I/O cancellation")));
     let original_io = report.downcast_ref::<io::Error>().unwrap();
     let original_payload = ptr::from_ref(original_io.as_cancellation().unwrap());
     assert!(report.downcast_ref::<CancellationError>().is_none());
     assert_eq!(report.as_cancellation().unwrap().reason, "I/O cancellation");
 
-    let normalized = report.normalize_cancellation();
-
-    assert_eq!(
-        normalized
-            .downcast_ref::<CancellationError>()
-            .unwrap()
-            .reason,
-        "I/O cancellation"
-    );
-    let original_io = normalized.downcast_ref::<io::Error>().unwrap();
+    assert_eq!(report.as_cancellation().unwrap().reason, "I/O cancellation");
+    let original_io = report.downcast_ref::<io::Error>().unwrap();
     assert_eq!(original_io.kind(), io::ErrorKind::Other);
     assert!(ptr::eq(
         original_payload,
@@ -174,10 +148,8 @@ fn custom_sources_and_nested_io_payloads_are_traversed_without_discarding_wrappe
         "nested I/O cancellation"
     );
 
-    let normalized = report.normalize_cancellation();
-
-    assert!(normalized.downcast_ref::<CancellationError>().is_some());
-    let wrapper = normalized.downcast_ref::<SourcedFailure>().unwrap();
+    assert!(report.downcast_ref::<CancellationError>().is_none());
+    let wrapper = report.downcast_ref::<SourcedFailure>().unwrap();
     let outer_io = wrapper.source.downcast_ref::<io::Error>().unwrap();
     assert_eq!(outer_io.kind(), io::ErrorKind::PermissionDenied);
     let inner_io = outer_io
@@ -207,14 +179,50 @@ fn an_io_valued_typed_context_is_checked_even_when_absent_from_the_source_chain(
         "I/O typed context cancellation"
     );
 
-    let normalized = report.normalize_cancellation();
-
-    assert!(normalized.downcast_ref::<CancellationError>().is_some());
-    assert!(normalized.downcast_ref::<MessageOnlyFailure>().is_some());
-    let original_io = normalized.downcast_ref::<io::Error>().unwrap();
+    assert!(report.downcast_ref::<CancellationError>().is_none());
+    assert!(report.downcast_ref::<MessageOnlyFailure>().is_some());
+    let original_io = report.downcast_ref::<io::Error>().unwrap();
     assert_eq!(original_io.kind(), io::ErrorKind::BrokenPipe);
     assert_eq!(
         original_io.as_cancellation().unwrap().reason,
         "I/O typed context cancellation"
     );
+}
+
+#[test]
+fn report_mutation_and_extraction_preserve_the_typed_context_allocation() {
+    let reason = String::from("typed cancellation");
+    let original_pointer = reason.as_ptr();
+    let mut report = Report::new(MessageOnlyFailure("original failure"))
+        .wrap_err(CancellationError::new(reason))
+        .wrap_err("outer context");
+    report
+        .as_cancellation_mut()
+        .unwrap()
+        .reason
+        .make_ascii_uppercase();
+    let cancellation = report.into_cancellation().unwrap();
+    assert_eq!(cancellation.reason, "TYPED CANCELLATION");
+    assert_eq!(cancellation.reason.as_ptr(), original_pointer);
+}
+
+#[test]
+fn source_only_cancellation_cannot_be_mutated_or_extracted_from_a_report() {
+    let mut report = Report::new(SourcedFailure {
+        message: "wrapper",
+        source: Box::new(CancellationError::new("source cancellation")),
+    })
+    .wrap_err("outer context");
+    let original_source = ptr::from_ref(report.downcast_ref::<SourcedFailure>().unwrap());
+    let original_handler = ptr::from_ref(report.handler());
+    assert!(report.is_cancellation());
+    assert!(report.as_cancellation_mut().is_none());
+    let report = report.into_cancellation().unwrap_err();
+    assert_eq!(report.to_string(), "outer context");
+    assert!(ptr::eq(
+        original_source,
+        report.downcast_ref::<SourcedFailure>().unwrap()
+    ));
+    assert!(ptr::eq(original_handler, report.handler()));
+    assert!(report.is_cancellation());
 }

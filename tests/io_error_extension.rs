@@ -5,7 +5,7 @@ use std::fmt;
 use std::io;
 use std::ptr::from_ref;
 use teamy_cancellation::CancellationError;
-use teamy_cancellation::CancellationIoErrorExt;
+use teamy_cancellation::CancellationErrorExt;
 
 #[test]
 fn borrowing_mutating_and_consuming_preserve_the_original_reason_allocation() {
@@ -109,7 +109,11 @@ fn cancellation_in_a_source_chain_is_not_a_direct_cancellation_payload() {
             .unwrap()
             .is::<CancellationError>()
     );
-    assert!(error.as_cancellation().is_none());
+    assert_eq!(
+        error.as_cancellation().unwrap().reason,
+        "nested cancellation remains wrapped"
+    );
+    assert!(error.is_cancellation());
     assert!(error.as_cancellation_mut().is_none());
 
     let original = error.into_cancellation().unwrap_err();
