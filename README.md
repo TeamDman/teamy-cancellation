@@ -77,11 +77,11 @@ features = ["tracing"]`.
 
 ## Facet and Figue integration dependencies
 
-Version 0.7.1's optional Facet and Figue integrations use published TeamDman forks:
-[teamy-facet](https://crates.io/crates/teamy-facet) at 0.50.0-rc.7 and
-[teamy-figue](https://crates.io/crates/teamy-figue) at 6.0.0-rc.5.
-Figue uses Teamy JSON and Format 0.50.0-rc.8; the core Facet crates remain at
-0.50.0-rc.7.
+Version 0.7.2's optional Facet and Figue integrations use published TeamDman forks:
+[teamy-facet](https://crates.io/crates/teamy-facet) at 0.50.0-rc.8 and
+[teamy-figue](https://crates.io/crates/teamy-figue) at 6.0.0-rc.6.
+Figue uses Teamy JSON and Format 0.50.0-rc.10; the core Facet crates use
+0.50.0-rc.8.
 These are separate packages from upstream
 [Facet](https://github.com/facet-rs/facet) and
 [Figue](https://github.com/bearcove/figue), with their existing Rust library names
