@@ -203,14 +203,14 @@ let result: eyre::Result<()> = invocation.cancellable_scope(|scope| async move {
     scope.cancellable_scope(|read| async move {
         // Await an independently cancellable read using `read`.
         read.bail_if_cancelled()?;
-        Ok::<_, eyre::Report>(())
+        eyre::Ok(())
     }).await?;
 
     scope.deferred("finishing mutation and cache invalidation", |protected| async move {
         // Await the mutation and all required completion using `protected`.
         // Deeper requests create linked children from this supplied scope.
         protected.bail_if_cancelled()?;
-        Ok::<_, eyre::Report>(())
+        eyre::Ok(())
     }).await?;
 
     scope.bail_if_cancelled()?;
